@@ -1,0 +1,7 @@
+include LICENSE README.md AGENTS.md requirements-tested.txt
+recursive-include docs *.md *.csv *.json
+recursive-include app *.py *.css
+recursive-include examples *.py
+recursive-include tests *.py
+recursive-include .streamlit *.toml
+include examples/music_creator/output/experiment.json
