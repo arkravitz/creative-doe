@@ -83,3 +83,149 @@ def candidates(experiment, constraints=None, finite_candidates=None):
     return valid
 
 
+def recommend(
+    experiment,
+    n=4,
+    *,
+    exploration=1.0,
+    constraints=None,
+    contexts=None,
+    finite_candidates=None,
+    seed=None,
+):
+    if type(n) is not int or n < 1:
+        raise ValueError("n must be a positive integer")
+    if not np.isfinite(exploration) or not 0 <= exploration <= 1:
+        raise ValueError("exploration must be between 0 and 1")
+    c = constraints or Constraints()
+    pool = candidates(experiment, c, finite_candidates)
+    if contexts is None:
+        contexts = [{} for _ in range(n)]
+    if len(contexts) != n:
+        raise ValueError("Supply one observed/planned context per upcoming post")
+    for ctx in contexts:
+        if set(ctx) != set(experiment.contexts):
+            raise ValueError("Provide every contextual/blocking variable for each planned post")
+        for k, v in ctx.items():
+            experiment.contexts[k].validate(v)
+    fit = experiment.fit()
+    rows = np.asarray(
+        [
+            [fit.encoder.row(config, ctx, experiment.next_run + slot) for config in pool]
+            for slot, ctx in enumerate(contexts)
+        ]
+    )
+    if rows.dtype == object:
+        raise ValueError("Candidates have unknown modeled values")
+    x, _, _ = fit.encoder.data(experiment, experiment.primary_metric)
+    possible = diagnose(np.vstack([x, rows.reshape(-1, rows.shape[-1])]), fit.encoder.names)
+    warnings = list(fit.diagnostics["warnings"])
+    if possible["rank"] < possible["columns"]:
+        warnings.append(
+            "Even the feasible candidate set cannot identify all current coefficients; revise constraints/model."
+        )
+    rng = np.random.default_rng(experiment.seed + experiment.next_run if seed is None else seed)
+    tie = rng.random((n, len(pool))) * 1e-10
+    history = [o.configuration for o in experiment.observations]
+    direction = 1 if experiment.metrics[experiment.primary_metric].higher_is_better else -1
+    nodes = 0
+
+    def search(selected, covariance, details):
+        nonlocal nodes
+        nodes += 1
+        if nodes > c.search_budget:
+            raise InfeasibleDesign(
+                "Feasibility search budget exhausted; simplify constraints or increase search_budget"
+            )
+        slot = len(selected)
+        configs = [pool[j] for j in selected]
+        missing = [p for p in c.required if not any(matches(cfg, p) for cfg in configs)]
+        if slot == n:
+            balanced = all(
+                max(counts(k, configs)) - min(counts(k, configs)) <= 1 for k in c.balance
+            )
+            return details if not missing and balanced else None
+        remaining = n - slot
+        if any(not any(matches(cfg, p) for cfg in pool) for p in missing):
+            return None
+        if any(
+            sum(max(0, n // len(experiment.factors[k].levels) - v) for v in counts(k, configs))
+            > remaining
+            for k in c.balance
+        ):
+            return None
+        slot_rows = rows[slot]
+        gain = 0.5 * np.log1p(np.einsum("ij,jk,ik->i", slot_rows, covariance, slot_rows))
+        predictions = direction * (slot_rows @ fit.mean)
+
+        def normalize(values):
+            span = np.ptp(values)
+            return (values - np.min(values)) / span if span > 1e-12 else np.zeros_like(values)
+
+        scores = (
+            exploration * normalize(gain) + (1 - exploration) * normalize(predictions) + tie[slot]
+        )
+        for j in np.argsort(-scores):
+            config = pool[j]
+            if c.unique_batch and j in selected:
+                continue
+            if c.cooldown and config in (history + configs)[-c.cooldown :]:
+                continue
+            if any(
+                counts(k, configs + [config]).count(
+                    math.ceil(n / len(experiment.factors[k].levels)) + 1
+                )
+                for k in c.balance
+            ):
+                continue
+            if remaining == 1 and any(not matches(config, p) for p in missing):
+                continue
+            row = slot_rows[j]
+            v = covariance @ row
+            updated = covariance - np.outer(v, v) / (1 + row @ v)
+            detail = (int(j), float(gain[j]), row)
+            result = search(selected + [int(j)], updated, details + [detail])
+            if result is not None:
+                return result
+        return None
+
+    def counts(key, configs):
+        return [
+            sum(cfg[key] == level for cfg in configs) for level in experiment.factors[key].levels
+        ]
+
+    selected = search([], fit.covariance_scale.copy(), [])
+    if selected is None:
+        raise InfeasibleDesign(
+            "No batch satisfies all hard constraints; no constraints were relaxed"
+        )
+    result = []
+    for slot, (j, gain, row) in enumerate(selected):
+        config = pool[j]
+        reasons = [
+            f"Conditional Gaussian coefficient information gain: {gain:.3f} nats (given residual variance).",
+            f"Learning weight {exploration:.0%}; reward uses predicted transformed {experiment.primary_metric}.",
+        ]
+        for key, f in experiment.factors.items():
+            if f.status in {Status.ACTIVE, Status.SCREENING}:
+                known = sum(o.configuration.get(key) is not None for o in experiment.observations)
+                if known < 10:
+                    reasons.append(f"Explores {key}, observed in only {known} historical posts.")
+        if c.balance:
+            reasons.append("Enforces within-batch balance for " + ", ".join(c.balance) + ".")
+        reasons.append(
+            "Joint covariance scoring targets uncertain directions; inspect alias warnings before interpretation."
+        )
+        result.append(
+            {
+                "run": experiment.next_run + slot,
+                "schema_version": experiment.schema_version,
+                "configuration": config,
+                "context": contexts[slot],
+                "prediction": fit.predict(row),
+                "conditional_information_gain": gain,
+                "reasons": reasons,
+                "warnings": warnings,
+            }
+        )
+    return result
