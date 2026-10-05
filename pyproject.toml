@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "creative-doe"
+version = "0.1.0"
+description = "Continuous, schema-aware experimental design for creative work"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = ["numpy>=1.26,<3", "scipy>=1.11,<2"]
+
+[project.optional-dependencies]
+plot = ["matplotlib>=3.8"]
+ui = ["streamlit>=1.63,<2"]
+dev = ["pytest>=8,<10", "ruff>=0.9"]
+
+[project.scripts]
+creative-doe-benchmark = "creative_doe.simulation.benchmark:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
