@@ -77,7 +77,13 @@ def test_empty_states_and_invalid_outcome_do_not_invent_data():
     assert len(app.session_state.experiment.observations) == 0
 
 
-def test_sample_is_explicitly_simulated_and_all_pages_render():
+def test_sample_is_explicitly_simulated_and_all_pages_render(monkeypatch):
+    # A fresh checkout has no generated sample file. Keep this regression
+    # independent of whether a contributor ran the CLI example beforehand.
+    exists = Path.exists
+    monkeypatch.setattr(Path, "exists", lambda path: False
+                        if path.name == "experiment.json" and path.parent.name == "output"
+                        else exists(path))
     app = start()
     widget(app.button, "Explore a sample experiment").click().run()
     assert not app.exception

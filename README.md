@@ -27,6 +27,8 @@ python examples/music_creator/demo.py
 streamlit run app/streamlit_app.py
 ```
 
+In the UI, Explore a sample experiment creates 80 explicitly simulated observations in memory and works on a fresh checkout.
+
 For the library alone: `pip install -e .`. Runtime dependencies are NumPy and SciPy; Streamlit is optional. The repository includes a [tested dependency snapshot](requirements-tested.txt) for reproducing this run, not a universal lock across all operating systems.
 
 ## A changing experiment in a few lines

@@ -10,6 +10,7 @@ import streamlit as st
 from creative_doe import Experiment, Metric, Status
 from creative_doe.design.matrix import Encoder
 from creative_doe.scheduler import Constraints
+from creative_doe.simulation.music import build_music_sample
 
 ROOT = Path(__file__).resolve().parents[1]
 PAGES = ["Overview", "Creative choices", "Next posts", "Results", "Insights"]
@@ -514,11 +515,8 @@ def overview():
             st.divider()
             st.caption("Want to see how it works with results?")
             if st.button("Explore a sample experiment", use_container_width=True):
-                path = ROOT / "examples/music_creator/output/experiment.json"
-                if path.exists():
-                    replace_experiment(Experiment.load(path), demo=True)
-                else:
-                    st.info("Run the music_creator demo to create the sample experiment.")
+                sample, _ = build_music_sample()
+                replace_experiment(sample, demo=True)
 
 
 def choices_page():
